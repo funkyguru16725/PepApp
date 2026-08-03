@@ -1,0 +1,1573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Peptide Tracker</title>
+<meta name="description" content="Personal peptide dosing schedule, cycles, and injection site rotation tracker." />
+<link rel="manifest" href="./manifest.json" />
+<meta name="theme-color" content="#161B22" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Peptides" />
+<link rel="apple-touch-icon" href="./icon-192.png" />
+<link rel="icon" href="./icon-192.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #161B22; overscroll-behavior-y: contain; }
+  #root { min-height: 100vh; min-height: 100dvh; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+function IconBase({ size = 20, color = "currentColor", className, children }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color}
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {children}
+    </svg>
+  );
+}
+function Plus(props) { return <IconBase {...props}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></IconBase>; }
+function Minus(props) { return <IconBase {...props}><line x1="5" y1="12" x2="19" y2="12" /></IconBase>; }
+function X(props) { return <IconBase {...props}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></IconBase>; }
+function Check(props) { return <IconBase {...props}><polyline points="20 6 9 17 4 12" /></IconBase>; }
+function ChevronLeft(props) { return <IconBase {...props}><polyline points="15 18 9 12 15 6" /></IconBase>; }
+function ChevronRight(props) { return <IconBase {...props}><polyline points="9 18 15 12 9 6" /></IconBase>; }
+function CalendarDays(props) {
+  return (
+    <IconBase {...props}>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </IconBase>
+  );
+}
+function ListChecks(props) {
+  return (
+    <IconBase {...props}>
+      <line x1="9" y1="6" x2="20" y2="6" /><polyline points="4 6 5 7 7 5" />
+      <line x1="9" y1="12" x2="20" y2="12" /><polyline points="4 12 5 13 7 11" />
+      <line x1="9" y1="18" x2="20" y2="18" /><polyline points="4 18 5 19 7 17" />
+    </IconBase>
+  );
+}
+function Syringe(props) {
+  return (
+    <IconBase {...props}>
+      <path d="M18 2l4 4" /><path d="M20.5 6.5L9 18l-5 3 3-5L18.5 4.5" />
+      <path d="M13.5 6l4.5 4.5" /><path d="M6 16l2 2" />
+    </IconBase>
+  );
+}
+function Trash2(props) {
+  return (
+    <IconBase {...props}>
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    </IconBase>
+  );
+}
+function Pencil(props) {
+  return (
+    <IconBase {...props}>
+      <path d="M4 20l4-1L19 8l-3-3L5 16z" />
+      <path d="M15 5l3 3" />
+    </IconBase>
+  );
+}
+function MapPin(props) {
+  return (
+    <IconBase {...props}>
+      <path d="M12 21s7-7.58 7-12a7 7 0 1 0-14 0c0 4.42 7 12 7 12z" />
+      <circle cx="12" cy="9" r="2.5" />
+    </IconBase>
+  );
+}
+
+
+
+/* ---------- storage helpers ---------- */
+const PEPTIDES_KEY = "peptides-data";
+const LOG_KEY = "dose-log";
+const DRAFT_KEY = "draft-log";
+const MILESTONES_KEY = "dismissed-milestones";
+
+const STORAGE_PREFIX = "peptide-tracker:";
+async function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(STORAGE_PREFIX + key);
+    if (raw == null) return fallback;
+    return JSON.parse(raw);
+  } catch (e) {
+    return fallback;
+  }
+}
+async function saveJSON(key, value) {
+  try {
+    localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
+  } catch (e) {
+    console.error("storage set failed", key, e);
+  }
+}
+
+/* ---------- date helpers ---------- */
+const DAY_MS = 86400000;
+function dateKey(d) {
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function startOfDay(d) {
+  const n = new Date(d);
+  n.setHours(0, 0, 0, 0);
+  return n;
+}
+function daysBetween(a, b) {
+  return Math.floor((startOfDay(b) - startOfDay(a)) / DAY_MS);
+}
+function fmtShort(d) {
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WORKOUT_TYPES = ["Lifting", "Cardio", "Rest"];
+
+function relativeDayLabel(date, today) {
+  const diff = daysBetween(startOfDay(today), startOfDay(date));
+  if (diff === 0) return "Today";
+  if (diff === -1) return "Yesterday";
+  if (diff === 1) return "Tomorrow";
+  return date.toLocaleDateString(undefined, { weekday: "long" });
+}
+
+/* swipe-to-navigate: returns touch handlers that call onLeft/onRight on a horizontal swipe */
+function useSwipeHandlers(onLeft, onRight) {
+  const start = useRef(null);
+  return {
+    onTouchStart: (e) => {
+      start.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    },
+    onTouchEnd: (e) => {
+      if (!start.current) return;
+      const dx = e.changedTouches[0].clientX - start.current.x;
+      const dy = e.changedTouches[0].clientY - start.current.y;
+      if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        if (dx < 0) onLeft(); else onRight();
+      }
+      start.current = null;
+    },
+  };
+}
+
+/* ---------- log entry helpers (back-compat with old boolean entries) ---------- */
+function entryTaken(e) {
+  if (e == null) return false;
+  return typeof e === "boolean" ? e : !!e.taken;
+}
+function entrySite(e) {
+  if (e == null || typeof e === "boolean") return null;
+  return e.site || null;
+}
+function effectiveEntry(log, draftLog, dk, peptideId) {
+  return draftLog[dk]?.[peptideId] ?? log[dk]?.[peptideId] ?? null;
+}
+function dayHasDraft(draftLog, dk) {
+  return !!(draftLog[dk] && Object.keys(draftLog[dk]).length > 0);
+}
+
+/* ---------- cycle logic ---------- */
+function isOnCycleDay(peptide, date) {
+  const start = startOfDay(new Date(peptide.startDate));
+  const target = startOfDay(date);
+  if (target < start) return false;
+  const diff = daysBetween(start, target);
+  if (peptide.cycleType === "daily") return true;
+  if (peptide.cycleType === "weekdays") {
+    return (peptide.weekdays || []).includes(target.getDay());
+  }
+  if (peptide.cycleType === "onoff") {
+    const on = Math.max(1, peptide.onDays || 1);
+    const off = Math.max(0, peptide.offDays || 0);
+    const cycleLen = on + off;
+    if (cycleLen <= 0) return true;
+    const pos = ((diff % cycleLen) + cycleLen) % cycleLen;
+    return pos < on;
+  }
+  return true;
+}
+function cycleProgress(peptide, date) {
+  const start = startOfDay(new Date(peptide.startDate));
+  const target = startOfDay(date);
+  const diff = Math.max(0, daysBetween(start, target));
+  if (peptide.cycleType !== "onoff") return null;
+  const on = Math.max(1, peptide.onDays || 1);
+  const off = Math.max(0, peptide.offDays || 0);
+  const cycleLen = on + off;
+  if (cycleLen <= 0) return null;
+  const pos = ((diff % cycleLen) + cycleLen) % cycleLen;
+  const cycleNumber = Math.floor(diff / cycleLen) + 1;
+  return { pos, cycleLen, on, off, cycleNumber, dayInPhase: pos < on ? pos + 1 : pos - on + 1, phase: pos < on ? "on" : "off" };
+}
+
+function adherenceStats(peptide, log, today) {
+  const start = startOfDay(new Date(peptide.startDate));
+  const end = startOfDay(today);
+  if (end < start) return { due: 0, taken: 0, pct: null };
+  let due = 0, taken = 0;
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    if (!isOnCycleDay(peptide, d)) continue;
+    due += 1;
+    if (entryTaken(log[dateKey(d)]?.[peptide.id])) taken += 1;
+  }
+  return { due, taken, pct: due > 0 ? Math.round((taken / due) * 100) : null };
+}
+const UNITS = ["mg", "mcg", "IU", "ml", "units"];
+const PALETTE = ["#3E8E86", "#C9A15E", "#C4634E", "#6E8FC7", "#A574B5", "#5FA66B", "#CE8FAE", "#8A97A6"];
+const OFF_GRAY = "#454F5A";
+const INK = "#161B22";
+const PARCHMENT = "#F4F0E6";
+
+/* ---------- milestone tracking (every 4 weeks since a compound's cycle start) ---------- */
+const MILESTONE_DAYS = 28;
+function daysElapsed(peptide, today) {
+  return daysBetween(startOfDay(new Date(peptide.startDate)), startOfDay(today)) + 1;
+}
+function milestoneWeeks(peptide, today) {
+  const d = daysElapsed(peptide, today);
+  if (d <= 0 || d % MILESTONE_DAYS !== 0) return null;
+  return d / 7;
+}
+
+/* ---------- injection sites ---------- */
+const SITES = [
+  { id: "leftArm", label: "Left arm", cx: 41, cy: 100 },
+  { id: "rightArm", label: "Right arm", cx: 159, cy: 100 },
+  { id: "abdomenL", label: "Abdomen (L)", cx: 85, cy: 122 },
+  { id: "abdomenR", label: "Abdomen (R)", cx: 115, cy: 122 },
+  { id: "leftLoveHandle", label: "Left love handle", cx: 53, cy: 148 },
+  { id: "rightLoveHandle", label: "Right love handle", cx: 147, cy: 148 },
+  { id: "leftThigh", label: "Left thigh", cx: 80, cy: 220 },
+  { id: "rightThigh", label: "Right thigh", cx: 120, cy: 220 },
+];
+
+function nextColor(existingPeptides) {
+  const used = new Set(existingPeptides.map((p) => p.color));
+  const free = PALETTE.find((c) => !used.has(c));
+  return free || PALETTE[existingPeptides.length % PALETTE.length];
+}
+
+function siteStats(log, asOf) {
+  const dayKey = dateKey(asOf);
+  const stats = {};
+  for (const site of SITES) stats[site.id] = { count: 0, lastUsed: null, peptideId: null };
+  const day = log[dayKey] || {};
+  Object.entries(day).forEach(([peptideId, entry]) => {
+    if (!entryTaken(entry)) return;
+    const site = entrySite(entry);
+    if (!site || !stats[site]) return;
+    stats[site].count += 1;
+    stats[site].lastUsed = dayKey;
+    stats[site].peptideId = peptideId;
+  });
+  return stats;
+}
+
+function allTimeLastUsed(log) {
+  const last = {};
+  for (const site of SITES) last[site.id] = null;
+  Object.entries(log).forEach(([dk, day]) => {
+    Object.values(day).forEach((entry) => {
+      if (!entryTaken(entry)) return;
+      const site = entrySite(entry);
+      if (!site || !(site in last)) return;
+      if (!last[site] || dk > last[site]) last[site] = dk;
+    });
+  });
+  return last;
+}
+function recommendedSiteId(log) {
+  const last = allTimeLastUsed(log);
+  const sorted = SITES.slice().sort((a, b) => {
+    const la = last[a.id], lb = last[b.id];
+    if (la === lb) return 0;
+    if (la === null) return -1;
+    if (lb === null) return 1;
+    return la < lb ? -1 : 1;
+  });
+  return sorted[0]?.id || null;
+}
+function CycleRing({ peptide, date, size = 64 }) {
+  const prog = cycleProgress(peptide, date);
+  const on = isOnCycleDay(peptide, date);
+  const r = size / 2 - 6;
+  const c = 2 * Math.PI * r;
+  let fraction = 1;
+  if (prog) fraction = prog.dayInPhase / (prog.phase === "on" ? prog.on : prog.off);
+  const dash = c * Math.min(1, fraction);
+  const ringColor = on ? peptide.color : OFF_GRAY;
+  return (
+    <div className="relative flex items-center justify-center shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#2A3138" strokeWidth="5" />
+        <circle
+          cx={size / 2} cy={size / 2} r={r} fill="none"
+          stroke={ringColor}
+          strokeWidth="5" strokeDasharray={`${dash} ${c}`} strokeLinecap="round"
+        />
+      </svg>
+      <div className="absolute flex flex-col items-center leading-none">
+        <span className="text-[9px] tracking-wide" style={{ color: ringColor, fontFamily: "'IBM Plex Mono', monospace" }}>
+          {prog ? prog.dayInPhase : ""}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ColorDot({ color, size = 9 }) {
+  return <span className="rounded-full shrink-0" style={{ width: size, height: size, background: color }} />;
+}
+
+function SaveDayButton({ unsaved, onSave, compact }) {
+  return (
+    <button
+      onClick={onSave}
+      disabled={!unsaved}
+      className={`flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors ${compact ? "px-3 py-1.5 text-xs" : "w-full py-2.5 text-sm"}`}
+      style={{
+        background: unsaved ? ACCENT_STATIC : "#1D242C",
+        color: unsaved ? "#0B1210" : "#5A6472",
+        border: unsaved ? "none" : "1px solid #2A3138",
+      }}
+    >
+      {unsaved ? "Save day" : "Saved"}
+    </button>
+  );
+}
+
+/* ---------- Site picker (used when logging an injectable dose) ---------- */
+function SitePicker({ peptide, log, onPick, onCancel }) {
+  const recommended = useMemo(() => recommendedSiteId(log), [log]);
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4" style={{ paddingBottom: 88 }} onClick={onCancel}>
+      <div className="w-full sm:max-w-md rounded-2xl p-5 overflow-y-auto" style={{ background: INK, maxHeight: "70svh" }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 mb-1">
+          <ColorDot color={peptide.color} />
+          <h2 className="text-lg font-semibold" style={{ color: PARCHMENT, fontFamily: "'Fraunces', serif" }}>{peptide.name}</h2>
+        </div>
+        <p className="text-sm opacity-50 mb-4" style={{ color: PARCHMENT }}>Where's this dose going?</p>
+        <div className="grid grid-cols-2 gap-2">
+          {SITES.map((s) => {
+            const isRec = s.id === recommended;
+            return (
+              <button
+                key={s.id}
+                onClick={() => onPick(s.id)}
+                className="rounded-lg py-3 px-3 text-sm font-medium text-left border relative"
+                style={{ background: "#1D242C", borderColor: isRec ? ACCENT_STATIC : "#2E3742", color: PARCHMENT }}
+              >
+                {s.label}
+                {isRec && <span className="block text-[10px] mt-0.5" style={{ color: ACCENT_STATIC }}>Suggested</span>}
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={onCancel} className="w-full mt-3 rounded-xl py-2.5 text-sm opacity-60" style={{ color: PARCHMENT }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Peptide form ---------- */
+function PeptideForm({ initial, existingPeptides, onSave, onCancel }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [dose, setDose] = useState(initial?.dose || "");
+  const [unit, setUnit] = useState(initial?.unit || "mg");
+  const [cycleType, setCycleType] = useState(initial?.cycleType || "daily");
+  const [onDays, setOnDays] = useState(initial?.onDays || 5);
+  const [offDays, setOffDays] = useState(initial?.offDays || 2);
+  const [weekdays, setWeekdays] = useState(initial?.weekdays || [1, 3, 5]);
+  const [startDate, setStartDate] = useState(initial?.startDate || dateKey(new Date()));
+  const [time, setTime] = useState(initial?.time || "08:00");
+  const [notes, setNotes] = useState(initial?.notes || "");
+  const [injectable, setInjectable] = useState(initial?.injectable ?? true);
+  const [color, setColor] = useState(initial?.color || nextColor(existingPeptides));
+  const [dosesPerVial, setDosesPerVial] = useState(initial?.dosesPerVial ?? "");
+  const [dosesRemaining, setDosesRemaining] = useState(initial?.dosesRemaining ?? "");
+
+  function toggleWeekday(i) {
+    setWeekdays((w) => (w.includes(i) ? w.filter((x) => x !== i) : [...w, i].sort()));
+  }
+
+  function submit() {
+    if (!name.trim() || !dose) return;
+    onSave({
+      id: initial?.id || crypto.randomUUID(),
+      name: name.trim(),
+      dose,
+      unit,
+      cycleType,
+      onDays: Number(onDays),
+      offDays: Number(offDays),
+      weekdays,
+      startDate,
+      time,
+      notes: notes.trim(),
+      injectable,
+      color,
+      dosesPerVial: dosesPerVial === "" ? null : Number(dosesPerVial),
+      dosesRemaining: dosesRemaining === "" ? null : Number(dosesRemaining),
+    });
+  }
+
+  const inputCls = "w-full rounded-lg px-3 py-2.5 text-[15px] outline-none border transition-colors";
+  const inputStyle = { background: "#1D242C", borderColor: "#2E3742", color: PARCHMENT };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" style={{ paddingBottom: 88 }} onClick={onCancel}>
+      <div
+        className="w-full sm:max-w-md rounded-2xl p-5 overflow-y-auto"
+        style={{ background: INK, maxHeight: "70svh" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold" style={{ color: PARCHMENT, fontFamily: "'Fraunces', serif" }}>
+            {initial ? "Edit peptide" : "Add a peptide"}
+          </h2>
+          <button onClick={onCancel} className="p-1 rounded-full opacity-70 hover:opacity-100">
+            <X size={20} color={PARCHMENT} />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Name</label>
+            <input className={inputCls} style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. BPC-157" />
+          </div>
+
+          <div>
+            <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Color</label>
+            <div className="flex gap-2 mt-1">
+              {PALETTE.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setColor(c)}
+                  className="w-8 h-8 rounded-full flex items-center justify-center"
+                  style={{ background: c, outline: color === c ? `2px solid ${PARCHMENT}` : "none", outlineOffset: 2 }}
+                >
+                  {color === c && <Check size={14} color="#0B1210" />}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Dose</label>
+              <input className={inputCls} style={inputStyle} value={dose} onChange={(e) => setDose(e.target.value)} placeholder="250" inputMode="decimal" />
+            </div>
+            <div className="w-24">
+              <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Unit</label>
+              <select className={inputCls} style={inputStyle} value={unit} onChange={(e) => setUnit(e.target.value)}>
+                {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Time of day</label>
+            <input type="time" className={inputCls} style={inputStyle} value={time} onChange={(e) => setTime(e.target.value)} />
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg px-3 py-2.5 border" style={{ background: "#1D242C", borderColor: "#2E3742" }}>
+            <div className="flex items-center gap-2">
+              <MapPin size={16} color={PARCHMENT} className="opacity-60" />
+              <span className="text-sm" style={{ color: PARCHMENT }}>Injection (track site)</span>
+            </div>
+            <button
+              onClick={() => setInjectable((v) => !v)}
+              className="w-11 h-6 rounded-full relative transition-colors"
+              style={{ background: injectable ? ACCENT_STATIC : "#2E3742" }}
+            >
+              <span
+                className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform"
+                style={{ transform: injectable ? "translateX(22px)" : "translateX(2px)" }}
+              />
+            </button>
+          </div>
+
+          <div>
+            <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Schedule</label>
+            <div className="grid grid-cols-3 gap-2 mt-1">
+              {[["daily", "Every day"], ["onoff", "On / off"], ["weekdays", "Set days"]].map(([val, lbl]) => (
+                <button
+                  key={val}
+                  onClick={() => setCycleType(val)}
+                  className="rounded-lg py-2 text-xs font-medium border transition-colors"
+                  style={{
+                    background: cycleType === val ? color : "#1D242C",
+                    borderColor: cycleType === val ? color : "#2E3742",
+                    color: cycleType === val ? "#0B1210" : PARCHMENT,
+                  }}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {cycleType === "onoff" && (
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>On days</label>
+                <input type="number" min="1" className={inputCls} style={inputStyle} value={onDays} onChange={(e) => setOnDays(e.target.value)} />
+              </div>
+              <div className="flex-1">
+                <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Off days</label>
+                <input type="number" min="0" className={inputCls} style={inputStyle} value={offDays} onChange={(e) => setOffDays(e.target.value)} />
+              </div>
+            </div>
+          )}
+
+          {cycleType === "weekdays" && (
+            <div className="flex gap-1.5 flex-wrap">
+              {WEEKDAY_LABELS.map((d, i) => (
+                <button
+                  key={d}
+                  onClick={() => toggleWeekday(i)}
+                  className="w-10 h-10 rounded-full text-xs font-medium border"
+                  style={{
+                    background: weekdays.includes(i) ? color : "#1D242C",
+                    borderColor: weekdays.includes(i) ? color : "#2E3742",
+                    color: weekdays.includes(i) ? "#0B1210" : PARCHMENT,
+                  }}
+                >
+                  {d[0]}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Cycle start date</label>
+            <input type="date" className={inputCls} style={inputStyle} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+
+          <div>
+            <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Vial tracking (optional)</label>
+            <div className="flex gap-2 mt-1">
+              <div className="flex-1">
+                <input className={inputCls} style={inputStyle} value={dosesPerVial} onChange={(e) => setDosesPerVial(e.target.value)} placeholder="Doses per vial" inputMode="numeric" />
+              </div>
+              <div className="flex-1">
+                <input className={inputCls} style={inputStyle} value={dosesRemaining} onChange={(e) => setDosesRemaining(e.target.value)} placeholder="Doses left now" inputMode="numeric" />
+              </div>
+            </div>
+            <p className="text-xs opacity-40 mt-1" style={{ color: PARCHMENT }}>Leave blank to skip inventory tracking for this compound.</p>
+          </div>
+
+          <div>
+            <label className="text-xs uppercase tracking-wider opacity-60" style={{ color: PARCHMENT }}>Notes</label>
+            <textarea className={inputCls} style={{ ...inputStyle, resize: "none" }} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Site, reconstitution, reminders…" />
+          </div>
+        </div>
+
+        <button
+          onClick={submit}
+          className="w-full mt-5 rounded-xl py-3 font-semibold text-[15px]"
+          style={{ background: color, color: "#0B1210" }}
+        >
+          {initial ? "Save changes" : "Add peptide"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const ACCENT_STATIC = "#3E8E86";
+const ACCENT_GOLD = "#C9A15E";
+const ACCENT_CORAL = "#C4634E";
+
+/* ---------- Today view (single day) ---------- */
+function DayView({ peptides, log, draftLog, onRequestToggle, onSaveDay, onWorkoutChange, selectedDate, today }) {
+  const dueToday = peptides.filter((p) => isOnCycleDay(p, selectedDate));
+  const restToday = peptides.filter((p) => !isOnCycleDay(p, selectedDate));
+  const key = dateKey(selectedDate);
+  const unsaved = dayHasDraft(draftLog, key);
+  const workoutEntry = effectiveEntry(log, draftLog, key, "__workout__");
+  const workoutType = workoutEntry?.type || "";
+  const workoutDetail = workoutEntry?.detail || "";
+
+  if (peptides.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center py-20 px-6">
+        <Syringe size={36} style={{ color: ACCENT_STATIC }} className="mb-3 opacity-80" />
+        <p className="text-[15px]" style={{ color: PARCHMENT }}>No peptides yet.</p>
+        <p className="text-sm opacity-50 mt-1" style={{ color: PARCHMENT }}>Add one to start tracking your schedule.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 pb-28">
+      <div className="pt-2 pb-3 flex items-end justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-widest opacity-50" style={{ color: ACCENT_GOLD, fontFamily: "'IBM Plex Mono', monospace" }}>
+            {relativeDayLabel(selectedDate, today)}
+          </p>
+          <h1 className="text-2xl font-semibold" style={{ color: PARCHMENT, fontFamily: "'Fraunces', serif" }}>
+            {fmtShort(selectedDate)}
+          </h1>
+        </div>
+        <SaveDayButton unsaved={unsaved} onSave={() => onSaveDay(key)} compact />
+      </div>
+
+      {dueToday.length > 0 && (
+        <div className="space-y-2.5 mb-4">
+          {dueToday.map((p) => {
+            const entry = effectiveEntry(log, draftLog, key, p.id);
+            const taken = entryTaken(entry);
+            const site = entrySite(entry);
+            const siteLabel = site ? SITES.find((s) => s.id === site)?.label : null;
+            return (
+              <div key={p.id} className="flex items-center gap-3 rounded-xl p-3" style={{ background: "#1D242C", border: "1px solid #2A3138" }}>
+                <CycleRing peptide={p} date={selectedDate} size={52} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <ColorDot color={p.color} />
+                    <p className="font-medium truncate" style={{ color: PARCHMENT }}>{p.name}</p>
+                  </div>
+                  <p className="text-sm opacity-60" style={{ color: PARCHMENT, fontFamily: "'IBM Plex Mono', monospace" }}>
+                    {p.dose}{p.unit} · {p.time}
+                  </p>
+                  {siteLabel && <p className="text-xs opacity-50 mt-0.5" style={{ color: PARCHMENT }}>{siteLabel}</p>}
+                </div>
+                <button
+                  onClick={() => onRequestToggle(key, p)}
+                  className="w-11 h-11 rounded-full flex items-center justify-center shrink-0 transition-colors"
+                  style={{ background: taken ? p.color : "transparent", border: `2px solid ${taken ? p.color : "#3A4450"}` }}
+                >
+                  <Check size={20} color={taken ? "#0B1210" : "#3A4450"} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {dueToday.length > 0 && (
+        <p className="text-xs opacity-40 text-center mb-6" style={{ color: PARCHMENT }}>
+          {unsaved ? "Changes aren't recorded until you save this day." : "This day is saved."}
+        </p>
+      )}
+
+      <div className="mb-4">
+        <label className="text-xs uppercase tracking-widest opacity-40 mb-1.5 block" style={{ color: PARCHMENT }}>Today's training</label>
+        <div className="flex gap-2 mb-2">
+          {WORKOUT_TYPES.map((t) => (
+            <button
+              key={t}
+              onClick={() => onWorkoutChange(key, { type: t, detail: workoutDetail })}
+              className="flex-1 rounded-lg py-2 text-xs font-medium border transition-colors"
+              style={{
+                background: workoutType === t ? ACCENT_STATIC : "#1D242C",
+                borderColor: workoutType === t ? ACCENT_STATIC : "#2E3742",
+                color: workoutType === t ? "#0B1210" : PARCHMENT,
+              }}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <input
+          value={workoutDetail}
+          onChange={(e) => onWorkoutChange(key, { type: workoutType, detail: e.target.value })}
+          placeholder="e.g. Zone 2 cardio 45 min, Upper body lift…"
+          className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
+          style={{ background: "#1D242C", borderColor: "#2E3742", color: PARCHMENT }}
+        />
+      </div>
+
+      {restToday.length > 0 && (
+        <div>
+          <p className="text-xs uppercase tracking-widest opacity-40 mb-2" style={{ color: PARCHMENT }}>Resting</p>
+          <div className="space-y-2">
+            {restToday.map((p) => (
+              <div key={p.id} className="flex items-center gap-3 rounded-xl p-3 opacity-50" style={{ background: "#171C22" }}>
+                <CycleRing peptide={p} date={selectedDate} size={40} />
+                <div className="flex items-center gap-1.5">
+                  <ColorDot color={p.color} />
+                  <p className="font-medium" style={{ color: PARCHMENT }}>{p.name}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Week agenda view ---------- */
+function WeekView({ peptides, log, draftLog, onRequestToggle, onSaveDay, weekAnchor, today }) {
+  const days = useMemo(() => {
+    const start = startOfDay(weekAnchor);
+    start.setDate(start.getDate() - start.getDay());
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      return d;
+    });
+  }, [weekAnchor]);
+
+  return (
+    <div className="px-4 pb-28">
+      <div className="pt-2 pb-3">
+        <p className="text-xs uppercase tracking-widest opacity-50" style={{ color: ACCENT_GOLD, fontFamily: "'IBM Plex Mono', monospace" }}>Week of</p>
+        <h1 className="text-2xl font-semibold" style={{ color: PARCHMENT, fontFamily: "'Fraunces', serif" }}>
+          {fmtShort(days[0])} – {fmtShort(days[6])}
+        </h1>
+      </div>
+
+      {peptides.length === 0 ? (
+        <p className="text-center opacity-50 text-sm mt-8" style={{ color: PARCHMENT }}>Add a peptide to see your week.</p>
+      ) : (
+        <div className="space-y-3">
+          {days.map((d) => {
+            const key = dateKey(d);
+            const due = peptides.filter((p) => isOnCycleDay(p, d));
+            const isToday = daysBetween(startOfDay(today), startOfDay(d)) === 0;
+            const unsaved = dayHasDraft(draftLog, key);
+            return (
+              <div key={key} className="rounded-xl p-3" style={{ background: isToday ? "#1D242C" : "#171C22", border: `1px solid ${isToday ? "#2E3742" : "#1D242C"}` }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-baseline gap-2">
+                    <p className="text-sm font-semibold" style={{ color: isToday ? PARCHMENT : "#8A97A6" }}>
+                      {d.toLocaleDateString(undefined, { weekday: "short" })}
+                    </p>
+                    <p className="text-xs opacity-50" style={{ color: PARCHMENT }}>{fmtShort(d)}</p>
+                  </div>
+                  {due.length > 0 && <SaveDayButton unsaved={unsaved} onSave={() => onSaveDay(key)} compact />}
+                </div>
+                {due.length === 0 ? (
+                  <p className="text-xs opacity-30" style={{ color: PARCHMENT }}>Nothing scheduled</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {due.map((p) => {
+                      const entry = effectiveEntry(log, draftLog, key, p.id);
+                      const taken = entryTaken(entry);
+                      return (
+                        <div key={p.id} className="flex items-center gap-2">
+                          <ColorDot color={p.color} />
+                          <p className="flex-1 text-sm truncate" style={{ color: PARCHMENT }}>{p.name}</p>
+                          <p className="text-xs opacity-50" style={{ color: PARCHMENT, fontFamily: "'IBM Plex Mono', monospace" }}>{p.dose}{p.unit}</p>
+                          <button
+                            onClick={() => onRequestToggle(key, p)}
+                            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
+                            style={{ background: taken ? p.color : "transparent", border: `1.5px solid ${taken ? p.color : "#3A4450"}` }}
+                          >
+                            <Check size={13} color={taken ? "#0B1210" : "#3A4450"} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Today tab: day/week toggle + swipe navigation ---------- */
+function TodayTab({ peptides, log, draftLog, onRequestToggle, onSaveDay, onWorkoutChange, today }) {
+  const [mode, setMode] = useState("day");
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [weekAnchor, setWeekAnchor] = useState(today);
+
+  const shiftDay = (n) => setSelectedDate((d) => new Date(startOfDay(d).getTime() + n * DAY_MS));
+  const shiftWeek = (n) => setWeekAnchor((d) => new Date(startOfDay(d).getTime() + n * 7 * DAY_MS));
+
+  const swipe = useSwipeHandlers(
+    () => (mode === "day" ? shiftDay(1) : shiftWeek(1)),
+    () => (mode === "day" ? shiftDay(-1) : shiftWeek(-1))
+  );
+
+  return (
+    <div {...swipe}>
+      <div className="px-4 pt-5 flex items-center justify-between">
+        <div className="flex rounded-full p-1" style={{ background: "#1D242C" }}>
+          {["day", "week"].map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className="px-4 py-1.5 rounded-full text-xs font-medium capitalize transition-colors"
+              style={{ background: mode === m ? ACCENT_STATIC : "transparent", color: mode === m ? "#0B1210" : "#8A97A6" }}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1">
+          <button onClick={() => (mode === "day" ? shiftDay(-1) : shiftWeek(-1))} className="p-2 opacity-70">
+            <ChevronLeft size={18} color={PARCHMENT} />
+          </button>
+          <button onClick={() => (mode === "day" ? shiftDay(1) : shiftWeek(1))} className="p-2 opacity-70">
+            <ChevronRight size={18} color={PARCHMENT} />
+          </button>
+        </div>
+      </div>
+
+      {mode === "day" ? (
+        <DayView peptides={peptides} log={log} draftLog={draftLog} onRequestToggle={onRequestToggle} onSaveDay={onSaveDay} onWorkoutChange={onWorkoutChange} selectedDate={selectedDate} today={today} />
+      ) : (
+        <WeekView peptides={peptides} log={log} draftLog={draftLog} onRequestToggle={onRequestToggle} onSaveDay={onSaveDay} weekAnchor={weekAnchor} today={today} />
+      )}
+    </div>
+  );
+}
+
+/* ---------- Peptides list / manage view ---------- */
+function PeptidesView({ peptides, log, today, onAdd, onEdit, onDelete, onRefill }) {
+  const [confirmId, setConfirmId] = useState(null);
+
+  return (
+    <div className="px-4 pb-28 pt-5">
+      <div className="flex items-center justify-between mb-3">
+        <h1 className="text-xl font-semibold" style={{ color: PARCHMENT, fontFamily: "'Fraunces', serif" }}>Compounds</h1>
+        <button
+          onClick={onAdd}
+          className="flex items-center gap-1.5 rounded-full pl-3 pr-3.5 py-2 text-sm font-medium"
+          style={{ background: ACCENT_STATIC, color: "#0B1210" }}
+        >
+          <Plus size={16} /> Add compound
+        </button>
+      </div>
+
+      {peptides.length === 0 ? (
+        <div className="flex flex-col items-center justify-center text-center py-16">
+          <ListChecks size={36} style={{ color: ACCENT_STATIC }} className="mb-3 opacity-80" />
+          <p className="text-[15px]" style={{ color: PARCHMENT }}>No compounds added.</p>
+          <p className="text-sm opacity-50 mt-1" style={{ color: PARCHMENT }}>Tap "Add compound" to get started.</p>
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {peptides.map((p) => {
+            const prog = cycleProgress(p, new Date());
+            const scheduleLabel =
+              p.cycleType === "daily" ? "Every day" :
+              p.cycleType === "weekdays" ? (p.weekdays || []).map((i) => WEEKDAY_LABELS[i]).join(", ") :
+              `${p.onDays} on / ${p.offDays} off`;
+            const confirming = confirmId === p.id;
+            const adherence = adherenceStats(p, log, today);
+            const trackingVial = p.dosesPerVial != null && p.dosesRemaining != null;
+            const lowSupply = trackingVial && p.dosesRemaining <= 3;
+            return (
+              <div key={p.id} className="rounded-xl p-3.5" style={{ background: "#1D242C", border: `1px solid ${confirming ? ACCENT_CORAL : "#2A3138"}` }}>
+                <div className="flex items-start gap-3">
+                  <CycleRing peptide={p} date={new Date()} size={48} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <ColorDot color={p.color} />
+                      <p className="font-medium" style={{ color: PARCHMENT }}>{p.name}</p>
+                      {!p.injectable && <span className="text-[10px] uppercase tracking-wide opacity-40" style={{ color: PARCHMENT }}>oral</span>}
+                    </div>
+                    <p className="text-sm opacity-60 mt-0.5" style={{ color: PARCHMENT }}>
+                      {p.dose}{p.unit} · {p.time} · {scheduleLabel}
+                    </p>
+                    {prog && (
+                      <p className="text-xs mt-1" style={{ color: ACCENT_GOLD, fontFamily: "'IBM Plex Mono', monospace" }}>
+                        Cycle {prog.cycleNumber} · {prog.phase === "on" ? "on" : "off"}-phase day {prog.dayInPhase}
+                      </p>
+                    )}
+                    {adherence.pct !== null && (
+                      <p className="text-xs mt-1 opacity-60" style={{ color: PARCHMENT, fontFamily: "'IBM Plex Mono', monospace" }}>
+                        Adherence: {adherence.taken}/{adherence.due} ({adherence.pct}%)
+                      </p>
+                    )}
+                    {trackingVial && (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span
+                          className="text-xs px-2 py-0.5 rounded-full"
+                          style={{
+                            background: lowSupply ? "rgba(196,99,78,0.15)" : "rgba(95,166,107,0.12)",
+                            color: lowSupply ? ACCENT_CORAL : "#5FA66B",
+                          }}
+                        >
+                          {p.dosesRemaining}/{p.dosesPerVial} doses left
+                        </span>
+                        {p.dosesRemaining < p.dosesPerVial && (
+                          <button onClick={() => onRefill(p.id)} className="text-xs opacity-60 underline" style={{ color: PARCHMENT }}>
+                            Refill vial
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {p.notes && <p className="text-xs opacity-40 mt-1" style={{ color: PARCHMENT }}>{p.notes}</p>}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <button onClick={() => onEdit(p)} className="p-1.5 rounded-md opacity-70 hover:opacity-100">
+                      <Pencil size={16} color={PARCHMENT} />
+                    </button>
+                    <button
+                      onClick={() => setConfirmId(confirming ? null : p.id)}
+                      className="w-7 h-7 rounded-md flex items-center justify-center"
+                      style={{ background: confirming ? ACCENT_CORAL : "transparent", border: confirming ? "none" : "1px solid #3A4450" }}
+                    >
+                      <Minus size={15} color={confirming ? "#1A0E0B" : ACCENT_CORAL} />
+                    </button>
+                  </div>
+                </div>
+                {confirming && (
+                  <div className="flex items-center justify-between mt-3 pt-3" style={{ borderTop: "1px solid #2A3138" }}>
+                    <p className="text-xs" style={{ color: PARCHMENT }}>Remove {p.name} and its history?</p>
+                    <div className="flex gap-2">
+                      <button onClick={() => setConfirmId(null)} className="px-3 py-1.5 rounded-lg text-xs" style={{ color: PARCHMENT, border: "1px solid #3A4450" }}>
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => { onDelete(p.id); setConfirmId(null); }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium"
+                        style={{ background: ACCENT_CORAL, color: "#1A0E0B" }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <DataManagement peptides={peptides} log={log} today={today} />
+    </div>
+  );
+}
+
+/* ---------- Data management: backup export/import, CSV, print ---------- */
+function DataManagement({ peptides, log, today }) {
+  const fileInputRef = useRef(null);
+
+  return (
+    <div className="mt-6 rounded-xl p-3.5 space-y-2" style={{ background: "#1D242C", border: "1px solid #2A3138" }}>
+      <p className="text-xs uppercase tracking-widest opacity-40 mb-1" style={{ color: PARCHMENT }}>Your data</p>
+      <button onClick={() => window.dispatchEvent(new CustomEvent("pt:export-backup"))} className="w-full text-left text-sm py-2 opacity-80" style={{ color: PARCHMENT }}>
+        Export backup (.json)
+      </button>
+      <button onClick={() => fileInputRef.current?.click()} className="w-full text-left text-sm py-2 opacity-80" style={{ color: PARCHMENT }}>
+        Import backup (.json)
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) window.dispatchEvent(new CustomEvent("pt:import-backup", { detail: file }));
+          e.target.value = "";
+        }}
+      />
+      <button onClick={() => window.dispatchEvent(new CustomEvent("pt:export-csv"))} className="w-full text-left text-sm py-2 opacity-80" style={{ color: PARCHMENT }}>
+        Export dose history (.csv)
+      </button>
+      <button onClick={() => window.print()} className="w-full text-left text-sm py-2 opacity-80" style={{ color: PARCHMENT }}>
+        Print / save summary as PDF
+      </button>
+    </div>
+  );
+}
+function LogView({ peptides, log, weekAnchor, setWeekAnchor }) {
+  const days = useMemo(() => {
+    const start = startOfDay(weekAnchor);
+    const dow = start.getDay();
+    start.setDate(start.getDate() - dow);
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      return d;
+    });
+  }, [weekAnchor]);
+
+  const swipe = useSwipeHandlers(
+    () => setWeekAnchor((d) => new Date(startOfDay(d).getTime() + 7 * DAY_MS)),
+    () => setWeekAnchor((d) => new Date(startOfDay(d).getTime() - 7 * DAY_MS))
+  );
+
+  return (
+    <div className="px-4 pb-28 pt-5" {...swipe}>
+      <div className="flex items-center justify-between mb-4">
+        <button onClick={() => setWeekAnchor((d) => new Date(startOfDay(d).getTime() - 7 * DAY_MS))} className="p-2">
+          <ChevronLeft size={20} color={PARCHMENT} />
+        </button>
+        <p className="text-sm font-medium" style={{ color: PARCHMENT }}>
+          {fmtShort(days[0])} – {fmtShort(days[6])}
+        </p>
+        <button onClick={() => setWeekAnchor((d) => new Date(startOfDay(d).getTime() + 7 * DAY_MS))} className="p-2">
+          <ChevronRight size={20} color={PARCHMENT} />
+        </button>
+      </div>
+
+      {peptides.length === 0 ? (
+        <p className="text-center opacity-50 text-sm" style={{ color: PARCHMENT }}>Add a peptide to see history.</p>
+      ) : (
+        <div className="space-y-4">
+          {peptides.map((p) => (
+            <div key={p.id}>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <ColorDot color={p.color} />
+                <p className="text-sm font-medium" style={{ color: PARCHMENT }}>{p.name}</p>
+              </div>
+              <div className="grid grid-cols-7 gap-1.5">
+                {days.map((d) => {
+                  const due = isOnCycleDay(p, d);
+                  const entry = log[dateKey(d)]?.[p.id];
+                  const taken = entryTaken(entry);
+                  const future = startOfDay(d) > startOfDay(new Date());
+                  let bg = "#1D242C", border = "#2A3138";
+                  if (due && taken) { bg = p.color; border = p.color; }
+                  else if (due && !taken && !future) { bg = "transparent"; border = ACCENT_CORAL; }
+                  else if (!due) { bg = "#171C22"; border = "#171C22"; }
+                  return (
+                    <div key={dateKey(d)} className="flex flex-col items-center gap-1">
+                      <span className="text-[10px] opacity-40" style={{ color: PARCHMENT }}>{WEEKDAY_LABELS[d.getDay()][0]}</span>
+                      <div className="w-full aspect-square rounded-md border-2" style={{ background: bg, borderColor: border }} />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex items-center gap-4 mt-6 text-xs opacity-60 flex-wrap" style={{ color: PARCHMENT }}>
+        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded" style={{ background: "#8A97A6" }} /> Taken (peptide color)</div>
+        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded border-2" style={{ borderColor: ACCENT_CORAL }} /> Missed</div>
+        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded" style={{ background: "#171C22" }} /> Rest day</div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Sites view ---------- */
+function SitesView({ log, peptides, today }) {
+  const [refDate, setRefDate] = useState(today);
+  const stats = useMemo(() => siteStats(log, refDate), [log, refDate]);
+  const byId = useMemo(() => Object.fromEntries(peptides.map((p) => [p.id, p])), [peptides]);
+  const injectables = peptides.filter((p) => p.injectable);
+
+  const shiftDay = (n) => setRefDate((d) => new Date(startOfDay(d).getTime() + n * DAY_MS));
+  const swipe = useSwipeHandlers(() => shiftDay(1), () => shiftDay(-1));
+  const isToday = daysBetween(startOfDay(today), startOfDay(refDate)) === 0;
+
+  return (
+    <div className="px-4 pb-28 pt-5" {...swipe}>
+      <div className="flex items-center justify-between mb-1">
+        <h1 className="text-xl font-semibold" style={{ color: PARCHMENT, fontFamily: "'Fraunces', serif" }}>Injection rotation</h1>
+        <div className="flex items-center gap-1">
+          <button onClick={() => shiftDay(-1)} className="p-1.5 opacity-70">
+            <ChevronLeft size={17} color={PARCHMENT} />
+          </button>
+          <button onClick={() => shiftDay(1)} className="p-1.5 opacity-70">
+            <ChevronRight size={17} color={PARCHMENT} />
+          </button>
+        </div>
+      </div>
+      <p className="text-xs mb-1" style={{ color: ACCENT_GOLD, fontFamily: "'IBM Plex Mono', monospace" }}>
+        As of {isToday ? "today" : `${relativeDayLabel(refDate, today)}, ${fmtShort(refDate)}`}
+      </p>
+      <p className="text-sm opacity-50 mb-4" style={{ color: PARCHMENT }}>Shows only what was injected on this specific day. Swipe to look back or forward.</p>
+
+      {injectables.length > 0 && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5 mb-5">
+          {injectables.map((p) => (
+            <div key={p.id} className="flex items-center gap-1.5">
+              <ColorDot color={p.color} />
+              <span className="text-xs opacity-70" style={{ color: PARCHMENT }}>{p.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex justify-center mb-6">
+        <svg viewBox="0 0 200 290" width="220" height="319">
+          {/* silhouette */}
+          <circle cx="100" cy="22" r="16" fill="#232B33" />
+          <rect x="60" y="45" width="80" height="110" rx="26" fill="#232B33" />
+          <rect x="30" y="55" width="22" height="95" rx="11" fill="#232B33" />
+          <rect x="148" y="55" width="22" height="95" rx="11" fill="#232B33" />
+          <rect x="65" y="155" width="30" height="115" rx="15" fill="#232B33" />
+          <rect x="105" y="155" width="30" height="115" rx="15" fill="#232B33" />
+
+          {SITES.map((s) => {
+            const st = stats[s.id];
+            const peptide = st.peptideId ? byId[st.peptideId] : null;
+            const fill = peptide ? peptide.color : "#2A3138";
+            const ring = peptide ? peptide.color : "#3A4450";
+            return (
+              <circle key={s.id} cx={s.cx} cy={s.cy} r="11" fill={fill} fillOpacity={peptide ? 0.9 : 0.5} stroke={ring} strokeWidth="1.5" />
+            );
+          })}
+        </svg>
+      </div>
+
+      <div className="space-y-2">
+        {SITES.map((s) => {
+          const st = stats[s.id];
+          const peptide = st.peptideId ? byId[st.peptideId] : null;
+          return (
+            <div key={s.id} className="flex items-center gap-3 rounded-lg p-2.5" style={{ background: "#1D242C", border: "1px solid #2A3138" }}>
+              <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ background: peptide ? peptide.color : "#3A4450" }} />
+              <p className="flex-1 text-sm" style={{ color: PARCHMENT }}>{s.label}</p>
+              <p className="text-xs opacity-60 text-right" style={{ color: PARCHMENT, fontFamily: "'IBM Plex Mono', monospace" }}>
+                {peptide ? `${peptide.name}${st.count > 1 ? ` · ${st.count}×` : ""}` : "not used this day"}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Milestone banner ---------- */
+function MilestoneBanner({ alerts, onDismiss, notifPermission, onEnableNotifs }) {
+  if (alerts.length === 0) return null;
+  return (
+    <div className="px-4 pt-4 space-y-2">
+      {alerts.map(({ peptide, weeks }) => (
+        <div key={peptide.id} className="flex items-center gap-3 rounded-xl p-3" style={{ background: "#1D242C", border: `1px solid ${peptide.color}` }}>
+          <ColorDot color={peptide.color} size={12} />
+          <p className="flex-1 text-sm" style={{ color: PARCHMENT }}>
+            <span className="font-semibold">{peptide.name}</span> just hit <span style={{ color: peptide.color, fontFamily: "'IBM Plex Mono', monospace" }}>{weeks} weeks</span>
+          </p>
+          <button onClick={() => onDismiss(peptide.id, weeks)} className="p-1 opacity-70">
+            <X size={16} color={PARCHMENT} />
+          </button>
+        </div>
+      ))}
+      {notifPermission === "default" && (
+        <button
+          onClick={onEnableNotifs}
+          className="w-full text-xs rounded-lg py-2 opacity-70"
+          style={{ color: PARCHMENT, border: "1px solid #2A3138" }}
+        >
+          Turn on notifications for future milestones
+        </button>
+      )}
+    </div>
+  );
+}
+
+
+/* ---------- Print / PDF summary (rendered off-screen, shown only via window.print) ---------- */
+function PrintSummary({ peptides, log, today }) {
+  return (
+    <div id="print-summary">
+      <h1 style={{ fontSize: 22, marginBottom: 4 }}>Peptide & Medication Summary</h1>
+      <p style={{ fontSize: 12, color: "#555", marginBottom: 16 }}>Generated {fmtShort(today)}, {today.getFullYear()}</p>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ borderBottom: "2px solid #333", textAlign: "left" }}>
+            <th style={{ padding: "6px 8px" }}>Compound</th>
+            <th style={{ padding: "6px 8px" }}>Dose</th>
+            <th style={{ padding: "6px 8px" }}>Schedule</th>
+            <th style={{ padding: "6px 8px" }}>Cycle start</th>
+            <th style={{ padding: "6px 8px" }}>Adherence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {peptides.map((p) => {
+            const scheduleLabel =
+              p.cycleType === "daily" ? "Every day" :
+              p.cycleType === "weekdays" ? (p.weekdays || []).map((i) => WEEKDAY_LABELS[i]).join(", ") :
+              `${p.onDays} on / ${p.offDays} off`;
+            const a = adherenceStats(p, log, today);
+            return (
+              <tr key={p.id} style={{ borderBottom: "1px solid #ccc" }}>
+                <td style={{ padding: "6px 8px" }}>{p.name}{p.injectable ? "" : " (oral)"}</td>
+                <td style={{ padding: "6px 8px" }}>{p.dose}{p.unit}</td>
+                <td style={{ padding: "6px 8px" }}>{scheduleLabel}</td>
+                <td style={{ padding: "6px 8px" }}>{p.startDate}</td>
+                <td style={{ padding: "6px 8px" }}>{a.pct !== null ? `${a.taken}/${a.due} (${a.pct}%)` : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function buildDefaultPeptides() {
+  const today = dateKey(new Date());
+  return [
+    { id: crypto.randomUUID(), name: "Tadalafil", dose: "5", unit: "mg", cycleType: "daily", onDays: 1, offDays: 0, weekdays: [], startDate: today, time: "08:00", notes: "", injectable: false, color: "#3E8E86" },
+    { id: crypto.randomUUID(), name: "Anavar", dose: "25", unit: "mg", cycleType: "daily", onDays: 1, offDays: 0, weekdays: [], startDate: today, time: "08:00", notes: "", injectable: false, color: "#C9A15E" },
+    { id: crypto.randomUUID(), name: "Tesofensine", dose: "250", unit: "mcg", cycleType: "daily", onDays: 1, offDays: 0, weekdays: [], startDate: today, time: "08:00", notes: "", injectable: false, color: "#CE8FAE" },
+    { id: crypto.randomUUID(), name: "Klow", dose: "15", unit: "units", cycleType: "daily", onDays: 1, offDays: 0, weekdays: [], startDate: today, time: "08:00", notes: "", injectable: true, color: "#A574B5" },
+    { id: crypto.randomUUID(), name: "GH", dose: "3", unit: "IU", cycleType: "daily", onDays: 1, offDays: 0, weekdays: [], startDate: today, time: "08:00", notes: "", injectable: true, color: "#6E8FC7" },
+    { id: crypto.randomUUID(), name: "Testosterone", dose: "25", unit: "mg", cycleType: "onoff", onDays: 1, offDays: 1, weekdays: [], startDate: today, time: "08:00", notes: "Every other day (EOD)", injectable: true, color: "#C4634E" },
+    { id: crypto.randomUUID(), name: "HCG", dose: "250", unit: "IU", cycleType: "weekdays", onDays: 1, offDays: 0, weekdays: [1, 3, 5], startDate: today, time: "08:00", notes: "", injectable: true, color: "#5FA66B" },
+  ];
+}
+
+/* ---------- App ---------- */
+function PeptideTracker() {
+  const [peptides, setPeptides] = useState([]);
+  const [log, setLog] = useState({});
+  const [draftLog, setDraftLog] = useState({});
+  const [dismissedMilestones, setDismissedMilestones] = useState([]);
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
+  );
+  const notifiedRef = useRef(new Set());
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("today");
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [sitePicker, setSitePicker] = useState(null); // { key, peptide }
+  const [weekAnchor, setWeekAnchor] = useState(new Date());
+  const [today] = useState(new Date());
+
+  useEffect(() => {
+    (async () => {
+      const [p, l, d, dm] = await Promise.all([
+        loadJSON(PEPTIDES_KEY, null),
+        loadJSON(LOG_KEY, {}),
+        loadJSON(DRAFT_KEY, {}),
+        loadJSON(MILESTONES_KEY, []),
+      ]);
+      let peptideList = p;
+      if (peptideList === null) {
+        peptideList = buildDefaultPeptides();
+        await saveJSON(PEPTIDES_KEY, peptideList);
+      }
+      setPeptides(peptideList);
+      setLog(l);
+      setDraftLog(d);
+      setDismissedMilestones(dm);
+      setLoaded(true);
+    })();
+  }, []);
+
+  const milestoneAlerts = useMemo(() => {
+    return peptides
+      .map((p) => ({ peptide: p, weeks: milestoneWeeks(p, today) }))
+      .filter(({ weeks }) => weeks !== null)
+      .filter(({ peptide, weeks }) => !dismissedMilestones.includes(`${peptide.id}:${weeks}`));
+  }, [peptides, today, dismissedMilestones]);
+
+  useEffect(() => {
+    if (notifPermission !== "granted") return;
+    milestoneAlerts.forEach(({ peptide, weeks }) => {
+      const key = `${peptide.id}:${weeks}`;
+      if (notifiedRef.current.has(key)) return;
+      notifiedRef.current.add(key);
+      try {
+        new Notification(`${peptide.name} — ${weeks} week milestone`, {
+          body: `${peptide.name} has now been running for ${weeks} weeks.`,
+        });
+      } catch (e) { /* ignore unsupported contexts */ }
+    });
+  }, [milestoneAlerts, notifPermission]);
+
+  function dismissMilestone(peptideId, weeks) {
+    setDismissedMilestones((prev) => {
+      const next = [...prev, `${peptideId}:${weeks}`];
+      saveJSON(MILESTONES_KEY, next);
+      return next;
+    });
+  }
+
+  function enableNotifications() {
+    if (typeof Notification === "undefined") return;
+    Notification.requestPermission().then((perm) => setNotifPermission(perm));
+  }
+
+  const persistPeptides = useCallback((next) => {
+    setPeptides(next);
+    saveJSON(PEPTIDES_KEY, next);
+  }, []);
+
+  function handleSavePeptide(p) {
+    const exists = peptides.some((x) => x.id === p.id);
+    const next = exists ? peptides.map((x) => (x.id === p.id ? p : x)) : [...peptides, p];
+    persistPeptides(next);
+    setShowForm(false);
+    setEditing(null);
+  }
+
+  function handleDelete(id) {
+    persistPeptides(peptides.filter((x) => x.id !== id));
+  }
+
+  function updateDraftEntry(dk, peptideId, entry) {
+    setDraftLog((prev) => {
+      const day = { ...(prev[dk] || {}) };
+      day[peptideId] = entry;
+      const next = { ...prev, [dk]: day };
+      saveJSON(DRAFT_KEY, next);
+      return next;
+    });
+  }
+
+  function handleRequestToggle(dk, peptide) {
+    const current = effectiveEntry(log, draftLog, dk, peptide.id);
+    const taken = entryTaken(current);
+    if (taken) {
+      updateDraftEntry(dk, peptide.id, { taken: false, site: null });
+      return;
+    }
+    if (peptide.injectable) {
+      setSitePicker({ key: dk, peptide });
+    } else {
+      updateDraftEntry(dk, peptide.id, { taken: true, site: null });
+    }
+  }
+
+  function handleSaveDay(dk) {
+    const draftDay = draftLog[dk];
+    if (!draftDay || Object.keys(draftDay).length === 0) return;
+
+    // adjust vial inventory for any peptide whose taken-status actually changed
+    const adjustments = {}; // peptideId -> delta doses remaining
+    Object.entries(draftDay).forEach(([peptideId, newEntry]) => {
+      if (peptideId === "__note__") return;
+      const oldEntry = log[dk]?.[peptideId];
+      const wasTaken = entryTaken(oldEntry);
+      const nowTaken = entryTaken(newEntry);
+      if (wasTaken === nowTaken) return;
+      adjustments[peptideId] = (adjustments[peptideId] || 0) + (nowTaken ? -1 : 1);
+    });
+    if (Object.keys(adjustments).length > 0) {
+      persistPeptides(
+        peptides.map((p) => {
+          const delta = adjustments[p.id];
+          if (!delta || p.dosesPerVial == null || p.dosesRemaining == null) return p;
+          const nextRemaining = Math.max(0, Math.min(p.dosesPerVial, p.dosesRemaining + delta));
+          return { ...p, dosesRemaining: nextRemaining };
+        })
+      );
+    }
+
+    setLog((prevLog) => {
+      const nextDay = { ...(prevLog[dk] || {}), ...draftDay };
+      const nextLog = { ...prevLog, [dk]: nextDay };
+      saveJSON(LOG_KEY, nextLog);
+      return nextLog;
+    });
+    setDraftLog((prev) => {
+      const next = { ...prev };
+      delete next[dk];
+      saveJSON(DRAFT_KEY, next);
+      return next;
+    });
+  }
+
+  function handleRefill(peptideId) {
+    persistPeptides(peptides.map((p) => (p.id === peptideId ? { ...p, dosesRemaining: p.dosesPerVial } : p)));
+  }
+
+  function handleWorkoutChange(dk, workout) {
+    updateDraftEntry(dk, "__workout__", workout);
+  }
+
+  /* ---------- backup export / import / CSV ---------- */
+  function downloadBlob(content, mime, filename) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  const exportBackup = useCallback(() => {
+    const backup = { version: 1, exportedAt: new Date().toISOString(), peptides, log, draftLog, dismissedMilestones };
+    downloadBlob(JSON.stringify(backup, null, 2), "application/json", `peptide-tracker-backup-${dateKey(new Date())}.json`);
+  }, [peptides, log, draftLog, dismissedMilestones]);
+
+  const importBackup = useCallback((file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (Array.isArray(data.peptides)) persistPeptides(data.peptides);
+        if (data.log && typeof data.log === "object") { setLog(data.log); saveJSON(LOG_KEY, data.log); }
+        if (data.draftLog && typeof data.draftLog === "object") { setDraftLog(data.draftLog); saveJSON(DRAFT_KEY, data.draftLog); }
+        if (Array.isArray(data.dismissedMilestones)) { setDismissedMilestones(data.dismissedMilestones); saveJSON(MILESTONES_KEY, data.dismissedMilestones); }
+        alert("Backup imported.");
+      } catch (e) {
+        alert("Couldn't read that file — make sure it's a backup exported from this app.");
+      }
+    };
+    reader.readAsText(file);
+  }, [persistPeptides]);
+
+  const exportCSV = useCallback(() => {
+    const rows = [["Date", "Compound", "Dose", "Unit", "Site", "Taken"]];
+    Object.entries(log).sort(([a], [b]) => (a < b ? -1 : 1)).forEach(([dk, day]) => {
+      Object.entries(day).forEach(([peptideId, entry]) => {
+        if (peptideId === "__note__") return;
+        const p = peptides.find((x) => x.id === peptideId);
+        if (!p) return;
+        rows.push([dk, p.name, p.dose, p.unit, entrySite(entry) || "", entryTaken(entry) ? "Yes" : "No"]);
+      });
+    });
+    const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    downloadBlob(csv, "text/csv", `peptide-dose-history-${dateKey(new Date())}.csv`);
+  }, [log, peptides]);
+
+  useEffect(() => {
+    const onExportBackup = () => exportBackup();
+    const onImportBackup = (e) => importBackup(e.detail);
+    const onExportCSV = () => exportCSV();
+    window.addEventListener("pt:export-backup", onExportBackup);
+    window.addEventListener("pt:import-backup", onImportBackup);
+    window.addEventListener("pt:export-csv", onExportCSV);
+    return () => {
+      window.removeEventListener("pt:export-backup", onExportBackup);
+      window.removeEventListener("pt:import-backup", onImportBackup);
+      window.removeEventListener("pt:export-csv", onExportCSV);
+    };
+  }, [exportBackup, importBackup, exportCSV]);
+
+  if (!loaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: INK }}>
+        <p className="text-sm opacity-50" style={{ color: PARCHMENT }}>Loading…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen w-full" style={{ background: INK, fontFamily: "'Inter', system-ui, sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+        @media print {
+          body * { visibility: hidden; }
+          #print-summary, #print-summary * { visibility: visible; }
+          #print-summary { position: absolute; top: 0; left: 0; width: 100%; padding: 24px; color: #111; background: #fff; }
+        }
+        @media screen { #print-summary { display: none; } }
+      `}</style>
+
+      <PrintSummary peptides={peptides} log={log} today={today} />
+
+      <div className="max-w-md mx-auto relative">
+        <MilestoneBanner
+          alerts={milestoneAlerts}
+          onDismiss={dismissMilestone}
+          notifPermission={notifPermission}
+          onEnableNotifs={enableNotifications}
+        />
+
+        {tab === "today" && <TodayTab peptides={peptides} log={log} draftLog={draftLog} onRequestToggle={handleRequestToggle} onSaveDay={handleSaveDay} onWorkoutChange={handleWorkoutChange} today={today} />}
+        {tab === "peptides" && (
+          <PeptidesView
+            peptides={peptides}
+            log={log}
+            today={today}
+            onAdd={() => { setEditing(null); setShowForm(true); }}
+            onEdit={(p) => { setEditing(p); setShowForm(true); }}
+            onDelete={handleDelete}
+            onRefill={handleRefill}
+          />
+        )}
+        {tab === "log" && <LogView peptides={peptides} log={log} weekAnchor={weekAnchor} setWeekAnchor={setWeekAnchor} />}
+        {tab === "sites" && <SitesView log={log} peptides={peptides} today={today} />}
+
+        {/* floating add button */}
+        <div className="fixed bottom-24 left-0 right-0 z-40 pointer-events-none">
+          <div className="max-w-md mx-auto relative">
+            <button
+              onClick={() => { setEditing(null); setShowForm(true); }}
+              className="pointer-events-auto absolute right-4 bottom-0 w-14 h-14 rounded-full flex items-center justify-center shadow-lg"
+              style={{ background: ACCENT_STATIC }}
+            >
+              <Plus size={26} color="#0B1210" />
+            </button>
+          </div>
+        </div>
+
+        {/* bottom nav */}
+        <div className="fixed bottom-0 left-0 right-0 border-t z-[70]" style={{ background: "#12161B", borderColor: "#232B33" }}>
+          <div className="max-w-md mx-auto grid grid-cols-4">
+            {[
+              ["today", "Today", CalendarDays],
+              ["peptides", "Peptides", Syringe],
+              ["log", "Log", ListChecks],
+              ["sites", "Sites", MapPin],
+            ].map(([key, label, Icon]) => (
+              <button
+                key={key}
+                onClick={() => { setTab(key); setShowForm(false); setEditing(null); setSitePicker(null); }}
+                className="flex flex-col items-center gap-1 py-3"
+              >
+                <Icon size={20} color={tab === key ? ACCENT_STATIC : "#5A6472"} />
+                <span className="text-[11px]" style={{ color: tab === key ? ACCENT_STATIC : "#5A6472" }}>{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {showForm && (
+          <PeptideForm
+            initial={editing}
+            existingPeptides={peptides.filter((p) => p.id !== editing?.id)}
+            onSave={handleSavePeptide}
+            onCancel={() => { setShowForm(false); setEditing(null); }}
+          />
+        )}
+
+        {sitePicker && (
+          <SitePicker
+            peptide={sitePicker.peptide}
+            log={log}
+            onCancel={() => setSitePicker(null)}
+            onPick={(siteId) => {
+              updateDraftEntry(sitePicker.key, sitePicker.peptide.id, { taken: true, site: siteId });
+              setSitePicker(null);
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<PeptideTracker />);
+</script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>
