@@ -1,7 +1,7 @@
 {
-  "name": "Peptide Tracker",
-  "short_name": "Peptides",
-  "description": "Personal peptide dosing schedule, cycles, and injection site rotation tracker.",
+  "name": "Health Tracker",
+  "short_name": "Health",
+  "description": "Personal health tracker — peptides, supplements, macros, weight, training, and lab work in one place.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
