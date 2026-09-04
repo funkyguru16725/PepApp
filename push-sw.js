@@ -18,6 +18,22 @@ const MAX_STORED = 200;
 function openDb() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 2);
+    let settled = false;
+    // If another open connection (e.g. the main app tab) is holding an older
+    // version of this database, the upgrade blocks until that connection
+    // closes — which might never happen promptly. Without this, a blocked
+    // upgrade hangs the push event's logging step forever, even though the
+    // notification itself still displays fine (that doesn't depend on IndexedDB).
+    req.onblocked = () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("IndexedDB upgrade blocked by another open connection"));
+    };
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("IndexedDB open timed out"));
+    }, 3000);
     req.onupgradeneeded = (event) => {
       const db = req.result;
       if (!db.objectStoreNames.contains(NOTIF_STORE)) {
@@ -31,8 +47,18 @@ function openDb() {
         db.createObjectStore(PENDING_STORE, { keyPath: "id", autoIncrement: true });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(req.result);
+    };
+    req.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(req.error);
+    };
   });
 }
 
@@ -109,7 +135,7 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     Promise.all([
       self.registration.showNotification(title, options),
-      logNotification(title, body, extra),
+      logNotification(title, body, extra).catch((e) => console.error("Failed to log notification:", e)),
       // Tell any open tabs to refresh their notifications list immediately,
       // so the in-app history feels real-time rather than only updating on
       // next reload.
