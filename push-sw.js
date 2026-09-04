@@ -1,21 +1,34 @@
-// This service worker receives push notifications, shows them, and also
-// logs each one into IndexedDB so the app's Notifications tab can show
-// real-time and historical notifications even if the app was closed when
-// they arrived (localStorage isn't accessible from a service worker, so
-// IndexedDB is the only client-side storage that works for this).
+// This service worker receives push notifications, shows them, logs them
+// into IndexedDB (so the app's Notifications tab has history even for
+// pushes that arrived while the app was closed), and handles action button
+// taps on dose-reminder notifications.
+//
+// IMPORTANT CONSTRAINT: a service worker cannot access the main app's
+// localStorage. Everything it needs — the Worker URL/API key for making an
+// authenticated call, and any action the person takes on a notification —
+// has to go through IndexedDB, which is the one storage mechanism both the
+// SW and the main app can read and write.
 
 const DB_NAME = "peptide-notifications-db";
-const STORE_NAME = "notifications";
+const NOTIF_STORE = "notifications";
+const CONFIG_STORE = "config";
+const PENDING_STORE = "pendingActions";
 const MAX_STORED = 200;
 
 function openDb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = (event) => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: "id", autoIncrement: true });
+      if (!db.objectStoreNames.contains(NOTIF_STORE)) {
+        const store = db.createObjectStore(NOTIF_STORE, { keyPath: "id", autoIncrement: true });
         store.createIndex("timestamp", "timestamp");
+      }
+      if (!db.objectStoreNames.contains(CONFIG_STORE)) {
+        db.createObjectStore(CONFIG_STORE, { keyPath: "key" });
+      }
+      if (!db.objectStoreNames.contains(PENDING_STORE)) {
+        db.createObjectStore(PENDING_STORE, { keyPath: "id", autoIncrement: true });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -23,11 +36,11 @@ function openDb() {
   });
 }
 
-async function logNotification(title, body) {
+async function logNotification(title, body, extraData) {
   const db = await openDb();
-  const tx = db.transaction(STORE_NAME, "readwrite");
-  const store = tx.objectStore(STORE_NAME);
-  store.add({ title, body, timestamp: Date.now() });
+  const tx = db.transaction(NOTIF_STORE, "readwrite");
+  const store = tx.objectStore(NOTIF_STORE);
+  store.add({ title, body, timestamp: Date.now(), data: extraData || null });
 
   // Prune down to the most recent MAX_STORED entries so this can't grow
   // without bound over months of daily reminders.
@@ -50,6 +63,23 @@ async function logNotification(title, body) {
   return new Promise((resolve) => { tx.oncomplete = () => resolve(); });
 }
 
+async function getConfig(key) {
+  const db = await openDb();
+  return new Promise((resolve) => {
+    const tx = db.transaction(CONFIG_STORE, "readonly");
+    const req = tx.objectStore(CONFIG_STORE).get(key);
+    req.onsuccess = () => resolve(req.result ? req.result.value : null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function addPendingAction(action) {
+  const db = await openDb();
+  const tx = db.transaction(PENDING_STORE, "readwrite");
+  tx.objectStore(PENDING_STORE).add({ ...action, createdAt: Date.now() });
+  return new Promise((resolve) => { tx.oncomplete = () => resolve(); });
+}
+
 self.addEventListener("push", (event) => {
   let data = {};
   try {
@@ -59,15 +89,27 @@ self.addEventListener("push", (event) => {
   }
   const title = data.title || "Peptide Tracker";
   const body = data.body || "Time to log today's doses.";
+  const extra = data.data || null; // { type, date, compoundIds } for dose reminders
+
   const options = {
     body,
     icon: "./icon-192.png",
     badge: "./icon-192.png",
+    data: extra,
   };
+  // Action buttons only make sense on dose reminders — a "Mark taken" button
+  // on a weekly summary or plateau alert wouldn't mean anything.
+  if (extra && extra.type === "dose-reminder") {
+    options.actions = [
+      { action: "mark-taken", title: "Mark taken" },
+      { action: "snooze", title: "Snooze 15 min" },
+    ];
+  }
+
   event.waitUntil(
     Promise.all([
       self.registration.showNotification(title, options),
-      logNotification(title, body),
+      logNotification(title, body, extra),
       // Tell any open tabs to refresh their notifications list immediately,
       // so the in-app history feels real-time rather than only updating on
       // next reload.
@@ -79,7 +121,45 @@ self.addEventListener("push", (event) => {
 });
 
 self.addEventListener("notificationclick", (event) => {
+  const action = event.action; // "" if the notification body itself was tapped
+  const extra = event.notification.data;
   event.notification.close();
+
+  if (action === "mark-taken" && extra?.compoundIds) {
+    event.waitUntil(
+      addPendingAction({ type: "mark-taken", compoundIds: extra.compoundIds, date: extra.date }).then(() =>
+        // Nudge any open tab to apply this immediately rather than waiting
+        // for next launch.
+        self.clients.matchAll({ type: "window", includeUncontrolled: true })
+      ).then((clientList) => {
+        clientList.forEach((client) => client.postMessage({ type: "pending-action-added" }));
+      })
+    );
+    return;
+  }
+
+  if (action === "snooze" && extra?.compoundIds) {
+    event.waitUntil(
+      (async () => {
+        const workerUrl = await getConfig("workerUrl");
+        const apiKey = await getConfig("apiKey");
+        if (!workerUrl) return;
+        try {
+          await fetch(`${workerUrl}/snooze`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-API-Key": apiKey || "" },
+            body: JSON.stringify({ compoundIds: extra.compoundIds, minutes: 15 }),
+          });
+        } catch (e) {
+          // best-effort — if this fails, the original reminder already fired
+          // and the person can still mark it taken manually in the app
+        }
+      })()
+    );
+    return;
+  }
+
+  // Default: notification body tapped (not an action button) — just open the app.
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
